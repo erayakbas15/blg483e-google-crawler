@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Native Crawler and Search</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #f5f7fb; color: #222; }
+    h1, h2 { margin-bottom: 8px; }
+    section { background: #fff; border: 1px solid #d9dfeb; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 10px; }
+    label { display: block; font-size: 13px; margin-bottom: 4px; color: #445; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #b9c3d8; border-radius: 6px; }
+    button { margin-top: 12px; padding: 9px 14px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #d9dfeb; padding: 8px; text-align: left; font-size: 14px; }
+    th { background: #eef2ff; }
+    .muted { color: #667; font-size: 13px; }
+    .msg { margin-top: 10px; font-size: 14px; }
+    a { color: #1d4ed8; }
+  </style>
+</head>
+<body>
+  <h1>Crawler + Search Dashboard</h1>
+  <p class="muted">Server on port 3600. Start crawl jobs, watch live status, and search indexed words.</p>
+
+  <section>
+    <h2>Start Crawl Job</h2>
+    <form id="crawlForm">
+      <div class="grid">
+        <div>
+          <label for="origin">Origin URL</label>
+          <input id="origin" name="origin" type="text" placeholder="https://example.com" required>
+        </div>
+        <div>
+          <label for="maxDepth">Max Depth</label>
+          <input id="maxDepth" name="maxDepth" type="number" value="1" min="0">
+        </div>
+        <div>
+          <label for="hitRate">Hit Rate (sec delay)</label>
+          <input id="hitRate" name="hitRate" type="number" value="0.25" step="0.05" min="0">
+        </div>
+        <div>
+          <label for="maxQueue">Max Queue</label>
+          <input id="maxQueue" name="maxQueue" type="number" value="100" min="1">
+        </div>
+      </div>
+      <button type="submit">Start Crawl</button>
+      <div id="crawlMessage" class="msg"></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Live Crawler Status</h2>
+    <div class="muted">Auto-refresh every 2 seconds.</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Crawler ID</th>
+          <th>State</th>
+          <th>Origin</th>
+          <th>Max Depth</th>
+          <th>Queued</th>
+          <th>Visited</th>
+          <th>Active</th>
+        </tr>
+      </thead>
+      <tbody id="statusBody"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Search</h2>
+    <form id="searchForm">
+      <div class="grid" style="grid-template-columns: 1fr 180px;">
+        <div>
+          <label for="query">Query</label>
+          <input id="query" name="query" type="text" placeholder="word" required>
+        </div>
+        <div>
+          <label for="sortBy">Sort By</label>
+          <input id="sortBy" name="sortBy" type="text" value="relevance" readonly>
+        </div>
+      </div>
+      <button type="submit">Search</button>
+    </form>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Word</th>
+          <th>URL</th>
+          <th>Origin</th>
+          <th>Depth</th>
+          <th>Frequency</th>
+          <th>Score</th>
+        </tr>
+      </thead>
+      <tbody id="searchBody"></tbody>
+    </table>
+  </section>
+
+  <script>
+    const crawlForm = document.getElementById("crawlForm");
+    const crawlMessage = document.getElementById("crawlMessage");
+    const statusBody = document.getElementById("statusBody");
+    const searchForm = document.getElementById("searchForm");
+    const searchBody = document.getElementById("searchBody");
+
+    crawlForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const origin = document.getElementById("origin").value.trim();
+      const maxDepth = document.getElementById("maxDepth").value;
+      const hitRate = document.getElementById("hitRate").value;
+      const maxQueue = document.getElementById("maxQueue").value;
+
+      const url = `/crawl?origin=${encodeURIComponent(origin)}&maxDepth=${encodeURIComponent(maxDepth)}&hitRate=${encodeURIComponent(hitRate)}&maxQueue=${encodeURIComponent(maxQueue)}`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) {
+          crawlMessage.textContent = data.error || "Could not start job";
+          crawlMessage.style.color = "#b91c1c";
+          return;
+        }
+        crawlMessage.textContent = `Started crawler: ${data.crawlerId}`;
+        crawlMessage.style.color = "#047857";
+        await loadStatus();
+      } catch (err) {
+        crawlMessage.textContent = `Error: ${err}`;
+        crawlMessage.style.color = "#b91c1c";
+      }
+    });
+
+    async function loadStatus() {
+      try {
+        const res = await fetch("/status");
+        const data = await res.json();
+        const jobs = data.jobs || [];
+        statusBody.innerHTML = "";
+
+        if (jobs.length === 0) {
+          const row = document.createElement("tr");
+          row.innerHTML = "<td colspan='7'>No crawler jobs yet.</td>";
+          statusBody.appendChild(row);
+          return;
+        }
+
+        for (const job of jobs) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td>${job.crawlerId || ""}</td>
+            <td>${job.state || ""}</td>
+            <td>${job.origin || ""}</td>
+            <td>${job.maxDepth ?? ""}</td>
+            <td>${job.queued ?? ""}</td>
+            <td>${job.visited ?? ""}</td>
+            <td>${job.active ?? ""}</td>
+          `;
+          statusBody.appendChild(row);
+        }
+      } catch (err) {
+        statusBody.innerHTML = "<tr><td colspan='7'>Could not load status.</td></tr>";
+      }
+    }
+
+    searchForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const query = document.getElementById("query").value.trim();
+      const url = `/search?query=${encodeURIComponent(query)}&sortBy=relevance`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        searchBody.innerHTML = "";
+
+        if (!res.ok) {
+          const row = document.createElement("tr");
+          row.innerHTML = `<td colspan="6">${data.error || "Search failed"}</td>`;
+          searchBody.appendChild(row);
+          return;
+        }
+
+        const results = data.results || [];
+        if (results.length === 0) {
+          const row = document.createElement("tr");
+          row.innerHTML = `<td colspan="6">No results for "${data.query || query}".</td>`;
+          searchBody.appendChild(row);
+          return;
+        }
+
+        for (const item of results) {
+          const row = document.createElement("tr");
+          const safeUrl = item.url || "";
+          row.innerHTML = `
+            <td>${item.word}</td>
+            <td><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a></td>
+            <td>${item.origin}</td>
+            <td>${item.depth}</td>
+            <td>${item.frequency}</td>
+            <td>${item.score}</td>
+          `;
+          searchBody.appendChild(row);
+        }
+      } catch (err) {
+        searchBody.innerHTML = `<tr><td colspan="6">Error: ${err}</td></tr>`;
+      }
+    });
+
+    loadStatus();
+    setInterval(loadStatus, 2000);
+  </script>
+</body>
+</html>
